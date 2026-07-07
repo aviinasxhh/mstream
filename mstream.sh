@@ -58,14 +58,14 @@ player_worker() {
                 rm -f "$PID_FILE"
                 is_paused=0
                 
-                # check for errors (143 = skip/quit, 137 = force quit)
-                if [ $status -ne 0 ] && [ $status -ne 143 ] && [ $status -ne 137 ]; then
+                # check for errors (4 = quit/skip, 143 = killed, 137 = force quit)
+                if [ $status -ne 0 ] && [ $status -ne 4 ] && [ $status -ne 143 ] && [ $status -ne 137 ]; then
                     echo -e "\n\033[1;31m⚠ Error: Failed to stream '$title'. (It may be age-restricted or blocked)\033[0m"
                     echo -ne "mstream> "
                 fi
                 
                 # prevent youtube 403 rate-limiting
-                if [ $status -eq 143 ] || [ $status -eq 137 ] || [ $status -ne 0 ]; then
+                if [ $status -eq 4 ] || [ $status -eq 143 ] || [ $status -eq 137 ] || [ $status -ne 0 ]; then
                     sleep 1.5
                 fi
             fi
