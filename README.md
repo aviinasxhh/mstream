@@ -5,9 +5,7 @@
 ## Features
 - **Instant Search & Play**: Find and play high-quality audio tracks instantly from the command line.
 - **Background Streaming**: Built-in interactive shell (`mstream>`) lets you queue songs, skip tracks, and manage playlists seamlessly while music plays in the background.
-- **Smart Filters**: Automatically filters out music videos, lyrics, and extra cruft to play the official studio audio.
 - **Local Playlists**: Create, manage, and shuffle your own personal music playlists locally.
-- **Zero Python Dependencies**: 100% native Bash implementation.
 
 ## Prerequisites
 You need the following installed on your system:
@@ -28,21 +26,30 @@ brew install mpv yt-dlp
 
 ## Installation
 
+### Method 1: Global Install (Recommended)
+This installs `mstream` globally on your system, exactly like `ani-cli`.
+
 1. Clone the repository:
 ```bash
 git clone https://github.com/yourusername/mstream.git
 cd mstream
 ```
 
-2. Make it executable:
+2. Install it globally using `make`:
 ```bash
-chmod +x mstream.sh
+sudo make install
 ```
+You can now run `mstream` from anywhere in your terminal! 
 
-3. (Optional) Make it globally accessible by adding an alias to your `~/.bashrc` or `~/.zshrc`:
+*(To uninstall later, you can run `sudo make uninstall` inside the folder).*
+
+### Method 2: Portable Install
+If you don't have root access or just want to run it from a folder:
 ```bash
-echo 'alias mstream="/path/to/mstream/mstream.sh"' >> ~/.bashrc
-source ~/.bashrc
+git clone https://github.com/yourusername/mstream.git
+cd mstream
+chmod +x mstream.sh
+./mstream.sh
 ```
 
 ## Usage
