@@ -27,7 +27,7 @@ brew install mpv yt-dlp
 ## Installation
 
 ### Method 1: Global Install (Recommended)
-This installs `mstream` globally on your system, exactly like `ani-cli`.
+This installs `mstream` globally on your system.
 
 1. Clone the repository:
 ```bash
