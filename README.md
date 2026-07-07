@@ -5,7 +5,7 @@
 ## Features
 - **Instant Search & Play**: Find and play high-quality audio tracks instantly from the command line.
 - **Background Streaming**: Built-in interactive shell (`mstream>`) lets you queue songs, skip tracks, and manage playlists seamlessly while music plays in the background.
-- **Local Playlists**: Create, manage, and shuffle your own personal music playlists locally.
+- **Local Playlists**: Create, manage, and shuffle your own personal music playlists locally!
 
 ## Prerequisites
 You need the following installed on your system:
