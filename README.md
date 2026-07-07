@@ -52,6 +52,10 @@ chmod +x mstream.sh
 ./mstream.sh
 ```
 
+### Windows & macOS Support
+- **macOS**: Fully supported! You can use `sudo make install` just like on Linux. Just make sure you install the prerequisites first using `brew install mpv yt-dlp`.
+- **Windows**: Windows does not natively support `make` or Bash scripts. However, you can easily use `mstream` by installing [Git Bash](https://gitforwindows.org/) or [WSL](https://learn.microsoft.com/en-us/windows/wsl/install). Open Git Bash, clone the repository, and use **Method 2 (Portable Install)**. Ensure you have downloaded the Windows executables for `mpv` and `yt-dlp` and added them to your system PATH!
+
 ## Usage
 
 Simply run the script to enter the interactive shell:

@@ -4,7 +4,7 @@ First off, thank you for considering contributing to `mstream`!
 
 We want to keep this project lightweight, blazing fast, and incredibly reliable. To maintain this standard, we have a few strict guidelines for contributors.
 
-## 🚫 No "Vibe Coding"
+## No "Vibe Coding"
 
 We take engineering rigor seriously. We do not accept PRs from "vibe coders" (coding without understanding, guessing syntax, failing to test edge cases, or throwing code at the wall until it sticks). 
 
