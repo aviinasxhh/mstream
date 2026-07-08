@@ -1,6 +1,19 @@
-# mstream
+<p align=center>
+<br>
+<a href="Linux"><img src="https://img.shields.io/badge/os-linux-brightgreen">
+<a href="MacOS"><img src="https://img.shields.io/badge/os-mac-brightgreen">  
+<a href="Windows"><img src="https://img.shields.io/badge/os-windows-brightgreen">
+<br>
+<p align=center>
+<a href="https://discord.gg/YeY8jeakFY"><img src="https://invidget.switchblade.xyz/YeY8jeakFY"></a>
+</p>
+<p align=center>  
+<a href=https://github.com/aviinasxhh"><img src="https://img.shields.io/badge/lead-aviinasxhh-lightblue"></a> 
+</p>  
 
-`mstream` is a lightweight, incredibly fast music streaming CLI tool written entirely in Bash. It allows you to search, play, and manage music playlists directly from your terminal, without a heavy UI, leveraging the power of `yt-dlp` and `mpv`.
+<h3 align="center">
+Mstream is a lightweight, incredibly fast music streaming CLI tool written entirely in Bash. It allows you to search, play, and manage music playlists directly from your terminal.
+</h3>
 
 ## Features
 - **Instant Search & Play**: Find and play high-quality audio tracks instantly from the command line.
