@@ -15,6 +15,13 @@
 Mstream is a lightweight, incredibly fast music streaming CLI tool written entirely in Bash. It allows you to search, play, and manage music playlists directly from your terminal.
 </h3>
 
+<h1 align="center">
+    Preview
+</h1>
+
+[mstream-preview.webm](https://github.com/user-attachments/assets/a19163d5-0c98-4502-bb41-1ee4b4a1af0f)
+
+
 ## Features
 - **Instant Search & Play**: Find and play high-quality audio tracks instantly from the command line.
 - **Background Streaming**: Built-in interactive shell (`mstream>`) lets you queue songs, skip tracks, and manage playlists seamlessly while music plays in the background.
