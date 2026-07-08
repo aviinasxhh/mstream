@@ -31,7 +31,7 @@ This installs `mstream` globally on your system.
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/yourusername/mstream.git
+git clone https://github.com/aviinasxhh/mstream.git
 cd mstream
 ```
 
@@ -46,7 +46,7 @@ You can now run `mstream` from anywhere in your terminal!
 ### Method 2: Portable Install
 If you don't have root access or just want to run it from a folder:
 ```bash
-git clone https://github.com/yourusername/mstream.git
+git clone https://github.com/aviinasxhh/mstream.git
 cd mstream
 chmod +x mstream.sh
 ./mstream.sh
