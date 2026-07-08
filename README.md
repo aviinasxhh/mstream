@@ -97,3 +97,12 @@ Once inside the `mstream>` shell:
 ## License
 
 This project is licensed under the GNU General Public License v3.0 - see the [LICENSE](https://github.com/aviinasxhh/mstream/blob/master/LICENSE) file for details.
+
+## Disclaimer
+
+This project does not host, store, or distribute any copyrighted content — it simply streams audio by interacting with publicly available third-party data sources.
+
+- Users are solely responsible for ensuring their use of this tool complies with the **terms of service** of any third-party platforms it interacts with, applicable copyright law, and any other relevant regulations in their jurisdiction.
+- This project is **not affiliated with, endorsed by, or sponsored by** any third-party platform it may interact with.
+- The developer(s) of this project assume **no liability** for misuse of this tool, including but not limited to copyright infringement, violation of third-party terms of service, or any other unlawful use.
+- Use at your own risk. If you are a rights holder and believe this project infringes on your rights, please open an issue and it will be addressed promptly.
