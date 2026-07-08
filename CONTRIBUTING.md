@@ -18,7 +18,6 @@ Before submitting a Pull Request, you must ensure:
 - **Stay 100% Native Bash**: Do not introduce dependencies on Python, Node, Ruby, or other heavy runtimes. The beauty of this project is that it requires nothing more than `bash`, `yt-dlp`, and `mpv`.
 - **Keep it POSIX-friendly where possible**: While we use Bash-specific features (like arrays and `[[ ]]`), try to avoid overly obscure bashisms that make the code impossible to read.
 - **Maintain UI consistency**: If you add a new command or output, use the existing terminal color codes and keep the output clean.
-- **Lowercase Comments**: By convention in this project, keep inline code comments entirely in lowercase.
 
 ## How to Submit a Pull Request
 
