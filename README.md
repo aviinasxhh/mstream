@@ -5,7 +5,7 @@
 <a href="Windows"><img src="https://img.shields.io/badge/os-windows-brightgreen">
 <br>
 <p align=center>
-<a href="https://discord.gg/YeY8jeakFY"><img src="https://invidget.switchblade.xyz/YeY8jeakFY"></a>
+<a href="https://discord.gg/agxkDrz76H"><img src="https://invidget.switchblade.xyz/agxkDrz76H"></a>
 </p>
 <p align=center>  
 <a href="https://github.com/aviinasxhh"><img src="https://img.shields.io/badge/lead-aviinasxhh-lightblue"></a> 
