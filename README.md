@@ -96,4 +96,4 @@ Once inside the `mstream>` shell:
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the GNU General Public License v3.0 - see the [LICENSE](https://github.com/aviinasxhh/mstream/blob/master/LICENSE) file for details.
