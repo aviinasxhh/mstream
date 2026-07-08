@@ -8,7 +8,7 @@
 <a href="https://discord.gg/YeY8jeakFY"><img src="https://invidget.switchblade.xyz/YeY8jeakFY"></a>
 </p>
 <p align=center>  
-<a href=https://github.com/aviinasxhh"><img src="https://img.shields.io/badge/lead-aviinasxhh-lightblue"></a> 
+<a href="https://github.com/aviinasxhh"><img src="https://img.shields.io/badge/lead-aviinasxhh-lightblue"></a> 
 </p>  
 
 <h3 align="center">
