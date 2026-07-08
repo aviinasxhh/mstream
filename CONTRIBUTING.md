@@ -27,4 +27,4 @@ Before submitting a Pull Request, you must ensure:
 4. Push to the branch (`git push origin feature/amazing-feature`).
 5. Open a Pull Request and clearly describe *what* you changed, *why* you changed it, and *how* you tested it.
 
-Thank you for helping make `mstream` better!
+Thank you for helping make `mstream` better :)
