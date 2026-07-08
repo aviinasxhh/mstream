@@ -67,7 +67,7 @@ Or execute a command directly from your terminal:
 ./mstream.sh play blinding lights
 ```
 
-### Commands
+### Basic Commands
 
 Once inside the `mstream>` shell:
 
