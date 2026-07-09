@@ -84,24 +84,6 @@ Simply run the script to enter the interactive shell:
 ```bash
 ./mstream.sh
 ```
-Or execute a command directly from your terminal:
-```bash
-./mstream.sh play blinding lights
-```
-
-### Basic Commands
-
-Once inside the `mstream>` shell:
-
-- `play <query>`: Instantly search and queue the top result.
-- `search <query>`: Interactively search and select a song from a list.
-- `pause` / `resume`: Control background playback.
-- `skip`: Skip the current track.
-- `clear`: Clear the upcoming queue.
-- `add <playlist_name> <query>`: Add a song to a local playlist.
-- `list`: View all your saved playlists.
-- `playlist <playlist_name> [shuffle]`: Queue an entire playlist. Add `shuffle` to randomize it.
-- `quit`: Exit and stop all music.
 
 ## License
 
