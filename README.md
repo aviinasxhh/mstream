@@ -3,6 +3,7 @@
 <a href="Linux"><img src="https://img.shields.io/badge/os-linux-brightgreen">
 <a href="MacOS"><img src="https://img.shields.io/badge/os-mac-brightgreen">  
 <a href="Windows"><img src="https://img.shields.io/badge/os-windows-brightgreen">
+<a href="Windows"><img src="https://img.shields.io/badge/os-android-brightgreen">    
 <br>
 <p align=center>
 <a href="https://discord.gg/agxkDrz76H"><img src="https://invidget.switchblade.xyz/agxkDrz76H"></a>
@@ -72,9 +73,10 @@ chmod +x mstream.sh
 ./mstream.sh
 ```
 
-### Windows & macOS Support
+### Windows, macOS & android Support
 - **macOS**: Fully supported! You can use `sudo make install` just like on Linux. Just make sure you install the prerequisites first using `brew install mpv yt-dlp`.
 - **Windows**: Windows does not natively support `make` or Bash scripts. However, you can easily use `mstream` by installing [Git Bash](https://gitforwindows.org/) or [WSL](https://learn.microsoft.com/en-us/windows/wsl/install). Open Git Bash, clone the repository, and use **Method 2 (Portable Install)**. Ensure you have downloaded the Windows executables for `mpv` and `yt-dlp` and added them to your system PATH!
+- **Android**: Android? No problem you can use termux to use mstream by `pkg install bash git mpv yt-dlp`, `git clone https://github.com/aviinasxhh/mstream.git`, `cd mstream`, `cp mstream $PREFIX/bin/`. then `mstream`. Done!
 
 ## Usage
 
