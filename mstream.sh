@@ -8,12 +8,24 @@ PID_FILE="$CONFIG_DIR/mpv.pid"
 LOOP_FILE="$CONFIG_DIR/loop_mode"
 SKIPPED_FILE="$CONFIG_DIR/skipped"
 NOW_FILE="$CONFIG_DIR/now_playing"
+PAUSED_FILE="$CONFIG_DIR/paused"
+LOCK_FILE="$CONFIG_DIR/mstream.lock"
 
 mkdir -p "$PLAYLIST_DIR"
-> "$QUEUE_FILE"
+
+# prevents wo instances from fighting over the same state files
+if command -v flock &> /dev/null; then
+    exec 200>"$LOCK_FILE"
+    if ! flock -n 200; then
+        echo "Another instance of mstream is already running."
+        exit 1
+    fi
+fi
+
+: > "$QUEUE_FILE"
 rm -f "$PID_FILE"
 echo "off" > "$LOOP_FILE"
-rm -f "$SKIPPED_FILE" "$NOW_FILE"
+rm -f "$SKIPPED_FILE" "$NOW_FILE" "$PAUSED_FILE"
 
 check_dependencies() {
     printf "\033[34mChecking dependencies...\033[0m\n"
@@ -44,18 +56,25 @@ cleanup() {
     tput cnorm 2>/dev/null
     tput rmcup 2>/dev/null
     if [ -n "$WORKER_PID" ]; then
-        kill $WORKER_PID 2>/dev/null
+        kill "$WORKER_PID" 2>/dev/null
     fi
     if [ -f "$PID_FILE" ]; then
-        kill -9 $(cat "$PID_FILE") 2>/dev/null
+        kill -9 "$(cat "$PID_FILE")" 2>/dev/null
     fi
-    kill $(jobs -p) 2>/dev/null
-    rm -f "$PID_FILE" "$QUEUE_FILE" "$LOOP_FILE" "$SKIPPED_FILE" "$NOW_FILE"
+    local remaining_jobs
+    mapfile -t remaining_jobs < <(jobs -p)
+    if [ ${#remaining_jobs[@]} -gt 0 ]; then
+        kill "${remaining_jobs[@]}" 2>/dev/null
+    fi
+    rm -f "$PID_FILE" "$QUEUE_FILE" "$LOOP_FILE" "$SKIPPED_FILE" "$NOW_FILE" "$PAUSED_FILE"
     exit 0
 }
 trap cleanup EXIT INT TERM HUP
 
-is_paused=0
+# pause state lives in a file
+is_paused() {
+    [ -f "$PAUSED_FILE" ]
+}
 
 # background worker (silent - writes state to files, no terminal output)
 player_worker() {
@@ -77,7 +96,7 @@ player_worker() {
                 status=$?
                 rm -f "$PID_FILE"
                 rm -f "$NOW_FILE"
-                is_paused=0
+                rm -f "$PAUSED_FILE"
 
                 # handle loop: re-queue the song if loop is active
                 was_skipped=0
@@ -102,7 +121,7 @@ player_worker() {
                     echo "$line" >> "$QUEUE_FILE"
                 fi
 
-                # prevent youtube 403 rate-limiting
+                # prevents outube 403 rate-limiting
                 if [ $status -eq 4 ] || [ $status -eq 143 ] || [ $status -eq 137 ] || [ $status -ne 0 ]; then
                     sleep 1.5
                 fi
@@ -117,18 +136,35 @@ player_worker() {
 player_worker &
 WORKER_PID=$!
 
+urlencode() {
+    local string="$1" strlen encoded c o i
+    strlen=${#string}
+    for (( i=0; i<strlen; i++ )); do
+        c="${string:i:1}"
+        case "$c" in
+            [a-zA-Z0-9.~_-]) o="$c" ;;
+            ' ') o="+" ;;
+            *) printf -v o '%%%02X' "'$c" ;;
+        esac
+        encoded+="$o"
+    done
+    echo "$encoded"
+}
+
 search_song() {
     local query="$1"
     local limit="${2:-1}"
-    # reject URLs - only song name queries are allowed (no links if some retards try to put fishy links)
+    # reject URLs - only song name queries are allowed (no links if a nerd tries to put some fishy links)
     if [[ "$query" =~ ://|^www\. ]]; then
         echo "error: links are not supported. Please search by song name instead." >&2
         return
     fi
     echo "Searching..." >&2
-    local encoded_query=$(python3 -c "import urllib.parse; print(urllib.parse.quote_plus('$query'))")
+    local encoded_query
+    encoded_query=$(urlencode "$query")
     local search_url="https://music.youtube.com/search?q=${encoded_query}&sp=EgWQAQIQAQ%3D%3D"
-    local raw_output=$(yt-dlp --print "%(id)s|%(title)s|%(artist)s" "$search_url" --playlist-items "1:${limit}" --skip-download 2>/dev/null)
+    local raw_output
+    raw_output=$(yt-dlp --print "%(id)s|%(title)s|%(artist)s" "$search_url" --playlist-items "1:${limit}" --skip-download 2>/dev/null)
 
     if [ -n "$raw_output" ]; then
         echo "$raw_output"
@@ -137,43 +173,45 @@ search_song() {
 
 
 
-# --- playback helper functions ---
+# playback helper functions
 
 do_skip() {
     if [ -f "$PID_FILE" ]; then
         touch "$SKIPPED_FILE"
-        local pid=$(cat "$PID_FILE")
+        local pid
+        pid=$(cat "$PID_FILE")
         # resume first if paused, otherwise SIGTERM may not be delivered
-        if [ "$is_paused" -eq 1 ]; then
-            kill -CONT $pid 2>/dev/null
+        if is_paused; then
+            kill -CONT "$pid" 2>/dev/null
         fi
-        kill -TERM $pid 2>/dev/null
-        is_paused=0
+        kill -TERM "$pid" 2>/dev/null
+        rm -f "$PAUSED_FILE"
         return 0
     fi
     return 1
 }
 
 do_pause() {
-    if [ -f "$PID_FILE" ] && [ "$is_paused" -eq 0 ]; then
-        kill -STOP $(cat "$PID_FILE")
-        is_paused=1
+    if [ -f "$PID_FILE" ] && ! is_paused; then
+        kill -STOP "$(cat "$PID_FILE")"
+        touch "$PAUSED_FILE"
         return 0
     fi
     return 1
 }
 
 do_resume() {
-    if [ -f "$PID_FILE" ] && [ "$is_paused" -eq 1 ]; then
-        kill -CONT $(cat "$PID_FILE")
-        is_paused=0
+    if [ -f "$PID_FILE" ] && is_paused; then
+        kill -CONT "$(cat "$PID_FILE")"
+        rm -f "$PAUSED_FILE"
         return 0
     fi
     return 1
 }
 
 do_loop() {
-    local cur=$(cat "$LOOP_FILE" 2>/dev/null || echo "off")
+    local cur
+    cur=$(cat "$LOOP_FILE" 2>/dev/null || echo "off")
     local new_mode
     case "$cur" in
         "off")  new_mode="song" ;;
@@ -185,19 +223,131 @@ do_loop() {
     echo "$new_mode"
 }
 
-do_show_queue() {
-    if [ ! -s "$QUEUE_FILE" ]; then
-        echo "Queue is empty."
-        return
-    fi
-    echo ""
-    echo "#   Title                               Artist"
-    printf "\033[38;5;236m────────────────────────────────────────\033[0m\n"
+print_track_table() {
+    local file="$1"
     local i=1
+    echo ""
+    echo "    Title                               Artist"
     while IFS='|' read -r vid title artist; do
         printf "%-3s %-35s %s\n" "$i" "${title:0:34}" "$artist"
         i=$((i+1))
-    done < "$QUEUE_FILE"
+    done < "$file"
+}
+
+# parses a "1 3 5" / "2-4" style selection string against a valid range.
+parse_index_selection() {
+    local choice="$1" total="$2"
+    local -n _out="$3"
+    _out=()
+    local token start end
+    for token in $choice; do
+        if [[ "$token" =~ ^([0-9]+)-([0-9]+)$ ]]; then
+            start=${BASH_REMATCH[1]}
+            end=${BASH_REMATCH[2]}
+            if [ "$start" -ge 1 ] && [ "$end" -le "$total" ] && [ "$start" -le "$end" ]; then
+                local n
+                for ((n=start; n<=end; n++)); do _out+=("$n"); done
+            else
+                echo "Invalid range: $token"
+                return 1
+            fi
+        elif [[ "$token" =~ ^[0-9]+$ ]] && [ "$token" -ge 1 ] && [ "$token" -le "$total" ]; then
+            _out+=("$token")
+        else
+            echo "Invalid input: $token"
+            return 1
+        fi
+    done
+    [ ${#_out[@]} -gt 0 ]
+}
+
+# removes the given (unsorted) 1-based line numbers from a '|'-delimited
+# track file, printing what was removed. echoes the count removed.
+remove_tracks_by_indices() {
+    local file="$1"; shift
+    local indices=("$@")
+    local sorted removed vid title artist ln removed_count=0
+    mapfile -t sorted < <(printf '%s\n' "${indices[@]}" | sort -rnu)
+    for ln in "${sorted[@]}"; do
+        removed=$(sed -n "${ln}p" "$file")
+        IFS='|' read -r vid title artist <<< "$removed"
+        sed -i.bak "${ln}d" "$file" && rm -f "${file}.bak"
+        echo "Removed '$title'"
+        removed_count=$((removed_count+1))
+    done
+    echo "$removed_count"
+}
+
+do_queue_menu() {
+    while true; do
+        clear
+        printf "\033[34m                 Queue\033[0m\n"
+        printf "\033[38;5;236m────────────────────────────────────────\033[0m\n"
+
+        if [ ! -s "$QUEUE_FILE" ]; then
+            echo "Queue is empty."
+            echo ""
+            read -r -p "(press enter to go back) "
+            return
+        fi
+
+        print_track_table "$QUEUE_FILE"
+        echo ""
+        local qopts=("Remove tracks" "Move a track" "Clear queue" "Back")
+        menu_select "34" "${qopts[@]}"
+
+        case "$MENU_RESULT" in
+            "Remove tracks")
+                echo ""
+                read -e -p "Enter numbers to remove (e.g. 1 3 5 or 2-4, or blank to cancel): " choice
+                if [ -z "$choice" ]; then continue; fi
+                local total lines_to_remove=()
+                total=$(wc -l < "$QUEUE_FILE")
+                if parse_index_selection "$choice" "$total" lines_to_remove; then
+                    local removed_count
+                    removed_count=$(remove_tracks_by_indices "$QUEUE_FILE" "${lines_to_remove[@]}")
+                    echo "Removed $removed_count track(s) from queue."
+                fi
+                sleep 1
+                ;;
+            "Move a track")
+                echo ""
+                local total from_pos to_pos
+                total=$(wc -l < "$QUEUE_FILE")
+                read -e -p "Move from position (1-$total, blank to cancel): " from_pos
+                if [ -z "$from_pos" ]; then continue; fi
+                read -e -p "Move to position (1-$total): " to_pos
+                if ! [[ "$from_pos" =~ ^[0-9]+$ ]] || ! [[ "$to_pos" =~ ^[0-9]+$ ]] || \
+                   [ "$from_pos" -lt 1 ] || [ "$from_pos" -gt "$total" ] || \
+                   [ "$to_pos" -lt 1 ] || [ "$to_pos" -gt "$total" ]; then
+                    echo "Invalid positions. Must be between 1 and $total."
+                    sleep 1
+                    continue
+                fi
+                if [ "$from_pos" -eq "$to_pos" ]; then
+                    echo "Already at that position."
+                    sleep 1
+                    continue
+                fi
+                local line vid title artist
+                line=$(sed -n "${from_pos}p" "$QUEUE_FILE")
+                sed -i.bak "${from_pos}d" "$QUEUE_FILE" && rm -f "${QUEUE_FILE}.bak"
+                sed -i.bak "${to_pos}i\\${line}" "$QUEUE_FILE" && rm -f "${QUEUE_FILE}.bak"
+                IFS='|' read -r vid title artist <<< "$line"
+                echo "Moved '$title' from #$from_pos to #$to_pos"
+                sleep 1
+                ;;
+            "Clear queue")
+                : > "$QUEUE_FILE"
+                echo "Queue cleared."
+                sleep 1
+                return
+                ;;
+            "Back"|*)
+                return
+                ;;
+        esac
+    done
 }
 
 # interactive menu
@@ -272,7 +422,7 @@ menu_select() {
             printf "\033[%dA" "$count"
 
             for i in "${!options[@]}"; do
-                printf "\033[2K"  # clear line
+                printf "\033[2K"  
                 if [ $i -eq $selected ]; then
                     printf "\033[%sm▌\033[0m \033[1m%s\033[0m\n" "$color_code" "${options[$i]}"
                 else
@@ -312,7 +462,7 @@ do_interactive_search() {
     options+=("Cancel")
 
     echo ""
-    # Call menu with blue color (34)
+    # Call menu with blue colour
     menu_select "34" "${options[@]}"
 
     if [ "$MENU_RESULT" = "Cancel" ]; then
@@ -331,7 +481,7 @@ do_interactive_search() {
     return 0
 }
 
-# --- now playing screen (separate full-screen view with interactive menu) ---
+# now playing screen (separate full-screen view with interactive menu)
 
 render_status() {
     printf "\033[K\n"
@@ -343,7 +493,7 @@ render_status() {
         local loop_mode
         loop_mode=$(cat "$LOOP_FILE" 2>/dev/null || echo "off")
 
-        if [ "$is_paused" -eq 1 ]; then
+        if is_paused; then
             printf "\033[K\033[36mPaused:\033[0m \033[1m%s - %s\033[0m\n" "$title" "$artist"
         else
             printf "\033[K\033[36mPlaying:\033[0m \033[1m%s - %s\033[0m\n" "$title" "$artist"
@@ -380,14 +530,17 @@ playing_mode() {
 
         local current_now=""
         if [ -f "$NOW_FILE" ]; then current_now=$(cat "$NOW_FILE"); fi
-        local current_queue=$(wc -l < "$QUEUE_FILE" 2>/dev/null | tr -d ' ')
-        
-        if [ "$current_now" != "$last_now" ] || [ "$current_queue" != "$last_queue" ] || [ "$is_paused" != "$last_paused" ]; then
+        local current_queue
+        current_queue=$(wc -l < "$QUEUE_FILE" 2>/dev/null | tr -d ' ')
+        local current_paused=0
+        is_paused && current_paused=1
+
+        if [ "$current_now" != "$last_now" ] || [ "$current_queue" != "$last_queue" ] || [ "$current_paused" != "$last_paused" ]; then
             tput cup 0 0
             render_status
             last_now="$current_now"
             last_queue="$current_queue"
-            last_paused="$is_paused"
+            last_paused="$current_paused"
         fi
     }
 
@@ -396,19 +549,19 @@ playing_mode() {
         render_status
         last_now=$(cat "$NOW_FILE" 2>/dev/null)
         last_queue=$(wc -l < "$QUEUE_FILE" 2>/dev/null | tr -d ' ')
-        last_paused="$is_paused"
+        last_paused=0
+        is_paused && last_paused=1
         MENU_EXIT=""
 
         # build menu options dynamically
         local menu_options=("skip")
-        if [ "$is_paused" -eq 1 ]; then
+        if is_paused; then
             menu_options+=("resume")
         else
             menu_options+=("pause")
         fi
         menu_options+=("loop" "queue" "add" "quit")
 
-        # 31 is the color code for red
         MENU_TIMEOUT=1
         MENU_TIMEOUT_CB="check_playing_status"
         menu_select "31" "${menu_options[@]}"
@@ -437,9 +590,7 @@ playing_mode() {
                 ;;
             "queue")
                 clear
-                do_show_queue
-                echo ""
-                read -r -p "(press enter) "
+                do_queue_menu
                 clear
                 ;;
             "add")
@@ -500,7 +651,8 @@ playing_mode() {
 }
 
 do_interactive_playlists() {
-    input=""
+    PLAYLIST_ACTION=""
+    PLAYLIST_TARGET=""
     while true; do
         clear
         printf "\033[34m               Playlists\033[0m\n"
@@ -559,32 +711,10 @@ do_interactive_playlists() {
                 continue
             fi
             
-            local valid=1
             local to_delete=()
-            for token in $choice; do
-                if [[ "$token" =~ ^([0-9]+)-([0-9]+)$ ]]; then
-                    start=${BASH_REMATCH[1]}
-                    end=${BASH_REMATCH[2]}
-                    if [ "$start" -ge 1 ] && [ "$end" -le "${#plist[@]}" ] && [ "$start" -le "$end" ]; then
-                        for ((n=start; n<=end; n++)); do
-                            to_delete+=("$n")
-                        done
-                    else
-                        echo "Invalid range: $token"
-                        valid=0
-                        break
-                    fi
-                elif [[ "$token" =~ ^[0-9]+$ ]] && [ "$token" -ge 1 ] && [ "$token" -le "${#plist[@]}" ]; then
-                    to_delete+=("$token")
-                else
-                    echo "Invalid input: $token"
-                    valid=0
-                    break
-                fi
-            done
-
-            if [ "$valid" -eq 1 ] && [ ${#to_delete[@]} -gt 0 ]; then
-                sorted=($(printf '%s\n' "${to_delete[@]}" | sort -rnu))
+            if parse_index_selection "$choice" "${#plist[@]}" to_delete; then
+                local sorted
+                mapfile -t sorted < <(printf '%s\n' "${to_delete[@]}" | sort -rnu)
                 del_count=0
                 for ln in "${sorted[@]}"; do
                     idx=$((ln-1))
@@ -608,11 +738,13 @@ do_interactive_playlists() {
                 menu_select "34" "${sub_options[@]}"
                 case "$MENU_RESULT" in
                     "Play")
-                        input="_playlist \"$pname\""
+                        PLAYLIST_ACTION="play"
+                        PLAYLIST_TARGET="$pname"
                         return
                         ;;
                     "Shuffle")
-                        input="_playlist \"$pname\" shuffle"
+                        PLAYLIST_ACTION="shuffle"
+                        PLAYLIST_TARGET="$pname"
                         return
                         ;;
                     "Add Song")
@@ -627,7 +759,8 @@ do_interactive_playlists() {
                         fi
                         ;;
                     "Remove Song")
-                        input="_remove \"$pname\""
+                        PLAYLIST_ACTION="remove"
+                        PLAYLIST_TARGET="$pname"
                         return
                         ;;
                     "Delete Playlist")
@@ -645,303 +778,104 @@ do_interactive_playlists() {
     done
 }
 
-# --- main ---
+# main
 
-# handle initial command arguments
-if [ $# -gt 0 ]; then
-    initial_cmd="$*"
-else
-    initial_cmd=""
-fi
-
-# main interactive loop
-while true; do
-    if [ -n "$initial_cmd" ]; then
-        input="$initial_cmd"
-        initial_cmd=""
-        echo -e "\033[34mSearch a song:\033[0m $input"
+do_play_playlist() {
+    local pname="$1" is_shuffle="$2"
+    if [ ! -f "$PLAYLIST_DIR/${pname}.txt" ]; then
+        echo "Playlist '$pname' not found."
+        return
+    fi
+    local tracks_count=0
+    if [ "$is_shuffle" -eq 1 ]; then
+        reader() { shuf "$PLAYLIST_DIR/${pname}.txt"; }
     else
-        clear
-        printf "\033[34m              Mstream-CLI\033[0m\n"
-        printf "\033[38;5;236m────────────────────────────────────────\033[0m\n"
-        menu_select "34" "search" "playlists" "quit"
-        if [ "$MENU_RESULT" = "search" ]; then
-            read -e -p $'\001\033[34m\002Search a song (leave blank to cancel):\001\033[0m\002 ' input
-            if [ -z "$input" ]; then continue; fi
-        elif [ "$MENU_RESULT" = "playlists" ]; then
-            do_interactive_playlists
-            if [ -n "$input" ]; then
-                # Fall through to process input
-                :
-            else
-                continue
-            fi
-        elif [ "$MENU_RESULT" = "quit" ]; then
-            input="quit"
-        else
-            continue
-        fi
+        reader() { cat "$PLAYLIST_DIR/${pname}.txt"; }
+    fi
+    while read -r line; do
+        echo "$line" >> "$QUEUE_FILE"
+        tracks_count=$((tracks_count+1))
+    done < <(reader)
+
+    local shuffle_txt=""
+    if [ "$is_shuffle" -eq 1 ]; then shuffle_txt=" (shuffled)"; fi
+    echo "Queued $tracks_count tracks from '$pname'$shuffle_txt."
+    sleep 0.5
+    playing_mode
+}
+
+do_remove_from_playlist() {
+    local pname="$1"
+    local file="$PLAYLIST_DIR/${pname}.txt"
+    if [ ! -f "$file" ]; then
+        echo "Playlist '$pname' not found."
+        return
+    fi
+    if [ ! -s "$file" ]; then
+        echo "Playlist '$pname' is empty."
+        return
     fi
 
-    # parse input preserving quotes
-    eval set -- $input 2>/dev/null
-    cmd="$1"
-    shift
-    args="$*"
+    print_track_table "$file"
 
-    case "$cmd" in
+    read -e -p "Enter numbers to remove (e.g. 1 3 5 or 2-4, or 'cancel'): " choice
+    if [ "$choice" == "cancel" ] || [ -z "$choice" ]; then
+        echo "Cancelled."
+        return
+    fi
+    local total lines_to_remove=()
+    total=$(wc -l < "$file")
 
-        "pause")
-            if do_pause; then
-                echo "Paused."
-            else
-                echo "Not playing or already paused."
+    if ! parse_index_selection "$choice" "$total" lines_to_remove; then
+        return
+    fi
+
+    local removed_count
+    removed_count=$(remove_tracks_by_indices "$file" "${lines_to_remove[@]}")
+    echo "Removed $removed_count track(s) from '$pname'."
+}
+
+# handles an initial search query passed as CLI args, e.g. ./mstream.sh believer
+if [ $# -gt 0 ]; then
+    initial_query="$*"
+    echo -e "\033[34mSearching for:\033[0m $initial_query"
+    if do_interactive_search "$initial_query"; then
+        sleep 0.5
+        playing_mode
+    fi
+fi
+
+PLAYLIST_ACTION=""
+PLAYLIST_TARGET=""
+
+# main interactive loop - entirely menu/arrow-key driven, no typed commands
+while true; do
+    clear
+    printf "\033[34m              Mstream-CLI\033[0m\n"
+    printf "\033[38;5;236m────────────────────────────────────────\033[0m\n"
+    menu_select "34" "search" "playlists" "quit"
+
+    case "$MENU_RESULT" in
+        "search")
+            read -e -p $'\001\033[34m\002Search a song (leave blank to cancel):\001\033[0m\002 ' query
+            if [ -z "$query" ]; then continue; fi
+            if do_interactive_search "$query"; then
+                sleep 0.5
+                playing_mode
             fi
             ;;
-        "resume")
-            if do_resume; then
-                echo "Resumed."
-            else
-                echo "Not paused."
-            fi
-            ;;
-        "skip")
-            if do_skip; then
-                echo "Skipped."
-            else
-                echo "Nothing is playing."
-            fi
-            ;;
-        "loop")
-            new_mode=$(do_loop)
-            case "$new_mode" in
-                "off")   echo "Loop: off" ;;
-                "song")  echo "Loop: song (current track repeats)" ;;
-                "queue") echo "Loop: queue (queue repeats)" ;;
+        "playlists")
+            do_interactive_playlists
+            case "$PLAYLIST_ACTION" in
+                "play")    do_play_playlist "$PLAYLIST_TARGET" 0 ;;
+                "shuffle") do_play_playlist "$PLAYLIST_TARGET" 1 ;;
+                "remove")  do_remove_from_playlist "$PLAYLIST_TARGET" ;;
             esac
+            PLAYLIST_ACTION=""
+            PLAYLIST_TARGET=""
             ;;
-        "clear")
-            > "$QUEUE_FILE"
-            echo "Queue cleared."
-            ;;
-        "queue")
-            do_show_queue
-            echo ""
-            read -r -p "(press enter to return to menu) "
-            ;;
-        "dequeue")
-            if [ ! -s "$QUEUE_FILE" ]; then
-                echo "Queue is empty."
-                continue
-            fi
-            echo ""
-            echo "   Title                               Artist"
-            printf "\033[38;5;236m────────────────────────────────────────────────────────────────────────────────\033[0m\n"
-            i=1
-            while IFS='|' read -r vid title artist; do
-                printf "%-3s %-35s %s\n" "$i" "${title:0:34}" "$artist"
-                i=$((i+1))
-            done < "$QUEUE_FILE"
-
-            read -e -p "Enter numbers to remove (e.g. 1 3 5 or 2-4, or 'cancel'): " choice
-            if [ "$choice" == "cancel" ]; then
-                echo "Cancelled."
-                continue
-            fi
-            total=$(wc -l < "$QUEUE_FILE")
-
-            lines_to_remove=()
-            valid=1
-            for token in $choice; do
-                if [[ "$token" =~ ^([0-9]+)-([0-9]+)$ ]]; then
-                    start=${BASH_REMATCH[1]}
-                    end=${BASH_REMATCH[2]}
-                    if [ "$start" -ge 1 ] && [ "$end" -le "$total" ] && [ "$start" -le "$end" ]; then
-                        for ((n=start; n<=end; n++)); do
-                            lines_to_remove+=("$n")
-                        done
-                    else
-                        echo "Invalid range: $token"
-                        valid=0
-                        break
-                    fi
-                elif [[ "$token" =~ ^[0-9]+$ ]] && [ "$token" -ge 1 ] && [ "$token" -le "$total" ]; then
-                    lines_to_remove+=("$token")
-                else
-                    echo "Invalid input: $token"
-                    valid=0
-                    break
-                fi
-            done
-
-            if [ "$valid" -eq 0 ] || [ ${#lines_to_remove[@]} -eq 0 ]; then
-                continue
-            fi
-
-            sorted=($(printf '%s\n' "${lines_to_remove[@]}" | sort -rnu))
-            removed_count=0
-            for ln in "${sorted[@]}"; do
-                removed=$(sed -n "${ln}p" "$QUEUE_FILE")
-                IFS='|' read -r vid title artist <<< "$removed"
-                sed -i.bak "${ln}d" "$QUEUE_FILE" && rm -f "${QUEUE_FILE}.bak"
-                echo "Removed '$title'"
-                removed_count=$((removed_count+1))
-            done
-            echo "Removed $removed_count track(s) from queue."
-            ;;
-        "move")
-            if [ ! -s "$QUEUE_FILE" ]; then
-                echo "Queue is empty."
-                continue
-            fi
-            from_pos="$1"
-            to_pos="$2"
-            total=$(wc -l < "$QUEUE_FILE")
-            if [ -z "$from_pos" ] || [ -z "$to_pos" ]; then
-                echo ""
-                echo "#   Title                               Artist"
-                printf "\033[38;5;236m────────────────────────────────────────\033[0m\n"
-                i=1
-                while IFS='|' read -r vid title artist; do
-                    printf "%-3s %-35s %s\n" "$i" "${title:0:34}" "$artist"
-                    i=$((i+1))
-                done < "$QUEUE_FILE"
-                echo "Usage: move <from> <to>"
-                continue
-            fi
-            if ! [[ "$from_pos" =~ ^[0-9]+$ ]] || ! [[ "$to_pos" =~ ^[0-9]+$ ]] || \
-               [ "$from_pos" -lt 1 ] || [ "$from_pos" -gt "$total" ] || \
-               [ "$to_pos" -lt 1 ] || [ "$to_pos" -gt "$total" ]; then
-                echo "Invalid positions. Must be between 1 and $total."
-                continue
-            fi
-            if [ "$from_pos" -eq "$to_pos" ]; then
-                echo "Already at that position."
-                continue
-            fi
-            line=$(sed -n "${from_pos}p" "$QUEUE_FILE")
-            sed -i.bak "${from_pos}d" "$QUEUE_FILE" && rm -f "${QUEUE_FILE}.bak"
-            sed -i.bak "${to_pos}i\\${line}" "$QUEUE_FILE" && rm -f "${QUEUE_FILE}.bak"
-            IFS='|' read -r vid title artist <<< "$line"
-            echo "Moved '$title' from #$from_pos to #$to_pos"
-            ;;
-
-        "_remove")
-            pname="$1"
-            if [ -z "$pname" ]; then
-                echo "Usage: remove <playlist_name>"
-                continue
-            fi
-            if [ ! -f "$PLAYLIST_DIR/${pname}.txt" ]; then
-                echo "Playlist '$pname' not found."
-                continue
-            fi
-            if [ ! -s "$PLAYLIST_DIR/${pname}.txt" ]; then
-                echo "Playlist '$pname' is empty."
-                continue
-            fi
-
-            echo ""
-            echo "#   Title                               Artist"
-            printf "\033[38;5;236m────────────────────────────────────────\033[0m\n"
-            i=1
-            while IFS='|' read -r vid title artist; do
-                printf "%-3s %-35s %s\n" "$i" "${title:0:34}" "$artist"
-                i=$((i+1))
-            done < "$PLAYLIST_DIR/${pname}.txt"
-
-            read -e -p "Enter numbers to remove (e.g. 1 3 5 or 2-4, or 'cancel'): " choice
-            if [ "$choice" == "cancel" ]; then
-                echo "Cancelled."
-                continue
-            fi
-            total=$(wc -l < "$PLAYLIST_DIR/${pname}.txt")
-
-            lines_to_remove=()
-            valid=1
-            for token in $choice; do
-                if [[ "$token" =~ ^([0-9]+)-([0-9]+)$ ]]; then
-                    start=${BASH_REMATCH[1]}
-                    end=${BASH_REMATCH[2]}
-                    if [ "$start" -ge 1 ] && [ "$end" -le "$total" ] && [ "$start" -le "$end" ]; then
-                        for ((n=start; n<=end; n++)); do
-                            lines_to_remove+=("$n")
-                        done
-                    else
-                        echo "Invalid range: $token"
-                        valid=0
-                        break
-                    fi
-                elif [[ "$token" =~ ^[0-9]+$ ]] && [ "$token" -ge 1 ] && [ "$token" -le "$total" ]; then
-                    lines_to_remove+=("$token")
-                else
-                    echo "Invalid input: $token"
-                    valid=0
-                    break
-                fi
-            done
-
-            if [ "$valid" -eq 0 ] || [ ${#lines_to_remove[@]} -eq 0 ]; then
-                continue
-            fi
-
-            sorted=($(printf '%s\n' "${lines_to_remove[@]}" | sort -rnu))
-            removed_count=0
-            for ln in "${sorted[@]}"; do
-                removed=$(sed -n "${ln}p" "$PLAYLIST_DIR/${pname}.txt")
-                IFS='|' read -r vid title artist <<< "$removed"
-                sed -i.bak "${ln}d" "$PLAYLIST_DIR/${pname}.txt" && rm -f "$PLAYLIST_DIR/${pname}.txt.bak"
-                echo "Removed '$title'"
-                removed_count=$((removed_count+1))
-            done
-            echo "Removed $removed_count track(s) from '$pname'."
-            ;;
-        "_playlist")
-            pname="$1"
-            shift
-            is_shuffle=0
-            if [ "$1" == "shuffle" ]; then
-                is_shuffle=1
-            fi
-            if [ -z "$pname" ]; then
-                echo "Usage: playlist <name> [shuffle]"
-                continue
-            fi
-            if [ -f "$PLAYLIST_DIR/${pname}.txt" ]; then
-                tracks_count=0
-                if [ "$is_shuffle" -eq 1 ]; then
-                    list_cmd="shuf \"$PLAYLIST_DIR/${pname}.txt\""
-                else
-                    list_cmd="cat \"$PLAYLIST_DIR/${pname}.txt\""
-                fi
-                while read -r line; do
-                    echo "$line" >> "$QUEUE_FILE"
-                    tracks_count=$((tracks_count+1))
-                done < <(eval "$list_cmd")
-
-                shuffle_txt=""
-                if [ "$is_shuffle" -eq 1 ]; then shuffle_txt=" (shuffled)"; fi
-                echo "Queued $tracks_count tracks from '$pname'$shuffle_txt."
-                sleep 0.5
-                playing_mode
-            else
-                echo "Playlist '$pname' not found."
-            fi
-            ;;
-        "help"|"?")
-            show_help
-            ;;
-        "quit"|"exit")
+        "quit"|"")
             break
-            ;;
-        "")
-            ;;
-        *)
-            full_query="$cmd $args"
-            if do_interactive_search "$full_query"; then
-                sleep 0.5
-                playing_mode
-            fi
             ;;
     esac
 done
