@@ -56,14 +56,10 @@ This installs `mstream` globally on your system.
 git clone https://github.com/aviinasxhh/mstream.git
 cd mstream
 ```
-
-2. Install it globally using `make`:
-```bash
-sudo make install
+2. Run the shell inside the directory:
+``` 
+./mstream.sh
 ```
-You can now run `mstream` from anywhere in your terminal! 
-
-*(To uninstall later, you can run `sudo make uninstall` inside the folder).*
 
 ### Method 2: Portable Install
 If you don't have root access or just want to run it from a folder:
@@ -75,8 +71,8 @@ chmod +x mstream.sh
 ```
 
 ### Windows, macOS & android Support
-- **macOS**: Fully supported! You can use `sudo make install` just like on Linux. Just make sure you install the prerequisites first using `brew install mpv yt-dlp`.
-- **Windows**: Windows does not natively support `make` or Bash scripts. However, you can easily use `mstream` by installing [Git Bash](https://gitforwindows.org/) or [WSL](https://learn.microsoft.com/en-us/windows/wsl/install). Open Git Bash, clone the repository, and use **Method 2 (Portable Install)**. Ensure you have downloaded the Windows executables for `mpv` and `yt-dlp` and added them to your system PATH!
+- **macOS**: Fully supported!. Just make sure you install the prerequisites first using `brew install mpv yt-dlp`.
+- **Windows**: Windows does not natively support Bash scripts. However, you can easily use `mstream` by installing [Git Bash](https://gitforwindows.org/) or [WSL](https://learn.microsoft.com/en-us/windows/wsl/install). Open Git Bash, clone the repository, and use **Method 2 (Portable Install)**. Ensure you have downloaded the Windows executables for `mpv` and `yt-dlp` and added them to your system PATH!
 - **Android**: Android? No problem you can use termux to use mstream by `pkg install bash git mpv yt-dlp`, `git clone https://github.com/aviinasxhh/mstream.git`, `cd mstream`, `cp mstream $PREFIX/bin/`. then `mstream`. Done!
 
 ## Usage
