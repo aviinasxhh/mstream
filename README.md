@@ -1,9 +1,9 @@
 <p align=center>
 <br>
 <a href="Linux"><img src="https://img.shields.io/badge/os-linux-brightgreen">
-<a href="MacOS"><img src="https://img.shields.io/badge/os-mac-brightgreen">  
-<a href="Windows"><img src="https://img.shields.io/badge/os-windows-brightgreen">
+<a href="MacOS"><img src="https://img.shields.io/badge/os-mac-brightgreen">
 <a href="Windows"><img src="https://img.shields.io/badge/os-android-brightgreen">    
+<a href="Windows"><img src="https://img.shields.io/badge/os-windows-yellowgreen"> 
 <br>
 <p align=center>
 <a href="https://discord.gg/agxkDrz76H"><img src="https://invidget.switchblade.xyz/agxkDrz76H"></a>
