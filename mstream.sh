@@ -493,10 +493,20 @@ render_status() {
         local loop_mode
         loop_mode=$(cat "$LOOP_FILE" 2>/dev/null || echo "off")
 
+        local cols label track max_len
+        cols=$(tput cols 2>/dev/null || echo 80)
+        if is_paused; then label="Paused: "; else label="Playing: "; fi
+        max_len=$(( cols - ${#label} - 1 ))
+        [ "$max_len" -lt 1 ] && max_len=1
+        track="$title - $artist"
+        if [ "${#track}" -gt "$max_len" ]; then
+            track="${track:0:$((max_len - 1))}…"
+        fi
+
         if is_paused; then
-            printf "\033[K\033[36mPaused:\033[0m \033[1m%s - %s\033[0m\n" "$title" "$artist"
+            printf "\033[K\033[36mPaused:\033[0m \033[1m%s\033[0m\n" "$track"
         else
-            printf "\033[K\033[36mPlaying:\033[0m \033[1m%s - %s\033[0m\n" "$title" "$artist"
+            printf "\033[K\033[36mPlaying:\033[0m \033[1m%s\033[0m\n" "$track"
         fi
         printf "\033[K  \033[2m%s in queue | loop: %s\033[0m\n" "$queue_count" "$loop_mode"
     elif [ -s "$QUEUE_FILE" ]; then
