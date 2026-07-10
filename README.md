@@ -20,7 +20,8 @@ Mstream is a lightweight, incredibly fast music streaming CLI tool written entir
     Preview
 </h1>
 
-[mstream-preview.webm](https://github.com/user-attachments/assets/a19163d5-0c98-4502-bb41-1ee4b4a1af0f)
+[Mstream-cli preview.webm](https://github.com/user-attachments/assets/a825676e-e9b2-4286-8988-9c600c1df8cb)
+
 
 
 ## Features
