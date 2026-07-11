@@ -17,14 +17,16 @@ Mstream is a single Bash script (`mstream.sh`) that streams audio from YouTube M
 
 ## Startup
 
-When you run `./mstream.sh`, the script does four things before showing you anything:
+When you run `./mstream.sh`, the script does this before showing you anything:
 
-1. **Lock** — Acquires a file lock (`flock`) on `~/.mstream/mstream.lock` so two instances can't run at the same time.
-2. **Reset** — Clears all leftover state files from any previous session (`queue.txt`, `now_playing`, `paused`, etc.).
-3. **Dependency check** — Verifies `mpv` and `yt-dlp` are installed. Exits immediately if either is missing.
-4. **Spawn worker** — Starts `player_worker()` as a background process and saves its PID.
+1. **Create dirs** — `mkdir -p ~/.mstream/playlists`.
+2. **Lock** — Acquires a file lock (`flock`) on `~/.mstream/mstream.lock` so two instances can't run at the same time.
+3. **Reset** — Clears all leftover state files from any previous session (`queue.txt`, `now_playing`, `paused`, etc.) and sets `loop_mode` to `off`.
+4. **Dependency check** — Verifies `mpv` and `yt-dlp` are installed. Exits immediately if either is missing.
+5. **Register cleanup trap** — Sets a `trap` on `EXIT`, `INT`, `TERM`, `HUP` so resources are always cleaned up.
+6. **Spawn worker** — Starts `player_worker()` as a background process and saves its PID.
 
-If you pass arguments (e.g. `./mstream.sh believer`), mstream skips the main menu and jumps straight into a search → select → play flow.
+If you pass CLI arguments (e.g. `./mstream.sh believer`), mstream runs a search → select → play flow first. After playing mode ends, it falls through into the normal main menu loop.
 
 ---
 
@@ -69,7 +71,7 @@ URL-based inputs are explicitly rejected — only song name queries are allowed.
 
 ## Playing Mode (`playing` state)
 
-This takes over your entire terminal (`tput smcup`) and shows a live-updating Now Playing screen. The menu refreshes every 1 second to pick up track changes.
+This takes over your entire terminal (`tput smcup`) and shows a Now Playing screen. The menu's keyboard input has a 1-second timeout — when no key is pressed, a callback checks if the track, queue count, or pause state changed and redraws only the status bar if needed.
 
 **Available actions (self-loops on the `playing` state):**
 
