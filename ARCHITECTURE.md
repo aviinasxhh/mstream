@@ -115,7 +115,7 @@ while true:
     if mpv exited with error → sleep 1.5s (rate-limit cooldown)
 ```
 
-The worker never touches the terminal. It only reads/writes state files.
+The worker never touches the terminal. It only reads or writes state files.
 
 ---
 
