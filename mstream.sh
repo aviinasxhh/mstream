@@ -420,7 +420,7 @@ lyrics_view() {
                 printf "\033[K\033[2m%s\033[0m\n" "${txt:0:$((cols-1))}"
             fi
         done
-        printf "\033[K\n\033[K\033[2mPress any key to go back\033[0m\n"
+        printf "\033[K\n\033[K\033[2mPress any key to go back\033[0m\033[J\n"
 
         if read -t 0.3 -rsn1 _key 2>/dev/null; then
             break
