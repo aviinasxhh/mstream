@@ -1,6 +1,5 @@
 #!/bin/bash
 
-# configuration
 CONFIG_DIR="$HOME/.mstream"
 PLAYLIST_DIR="$CONFIG_DIR/playlists"
 QUEUE_FILE="$CONFIG_DIR/queue.txt"
@@ -10,10 +9,31 @@ SKIPPED_FILE="$CONFIG_DIR/skipped"
 NOW_FILE="$CONFIG_DIR/now_playing"
 PAUSED_FILE="$CONFIG_DIR/paused"
 LOCK_FILE="$CONFIG_DIR/mstream.lock"
+POS_FILE="$CONFIG_DIR/pos"
+SYNC_SCRIPT="$CONFIG_DIR/sync_pos.lua"
 
 mkdir -p "$PLAYLIST_DIR"
 
-# prevents wo instances from fighting over the same state files
+cat > "$SYNC_SCRIPT" << 'LUA_EOF'
+local pos_file = os.getenv("MSTREAM_POS_FILE")
+local last_time = 0
+
+local function write_pos(_, value)
+    if pos_file == nil or value == nil then return end
+    local now = mp.get_time()
+    if now - last_time >= 0.3 then
+        local f = io.open(pos_file, "w")
+        if f then
+            f:write(string.format("%.3f", value))
+            f:close()
+        end
+        last_time = now
+    end
+end
+
+mp.observe_property("time-pos", "number", write_pos)
+LUA_EOF
+
 if command -v flock &> /dev/null; then
     exec 200>"$LOCK_FILE"
     if ! flock -n 200; then
@@ -25,7 +45,7 @@ fi
 : > "$QUEUE_FILE"
 rm -f "$PID_FILE"
 echo "off" > "$LOOP_FILE"
-rm -f "$SKIPPED_FILE" "$NOW_FILE" "$PAUSED_FILE"
+rm -f "$SKIPPED_FILE" "$NOW_FILE" "$PAUSED_FILE" "$POS_FILE"
 
 check_dependencies() {
     printf "\033[34mChecking dependencies...\033[0m\n"
@@ -45,13 +65,15 @@ check_dependencies() {
         exit 1
     else
         printf "\033[32mAll dependencies are installed.\033[0m\n"
+        if ! command -v curl &> /dev/null; then
+            printf "\033[33mNote: curl was not found - the lyrics feature will be unavailable (bash can't do HTTPS on its own).\033[0m\n"
+        fi
         sleep 0.5
     fi
 }
 
 check_dependencies
 
-# cleanup on exit
 cleanup() {
     tput cnorm 2>/dev/null
     tput rmcup 2>/dev/null
@@ -66,17 +88,15 @@ cleanup() {
     if [ ${#remaining_jobs[@]} -gt 0 ]; then
         kill "${remaining_jobs[@]}" 2>/dev/null
     fi
-    rm -f "$PID_FILE" "$QUEUE_FILE" "$LOOP_FILE" "$SKIPPED_FILE" "$NOW_FILE" "$PAUSED_FILE"
+    rm -f "$PID_FILE" "$QUEUE_FILE" "$LOOP_FILE" "$SKIPPED_FILE" "$NOW_FILE" "$PAUSED_FILE" "$POS_FILE"
     exit 0
 }
 trap cleanup EXIT INT TERM HUP
 
-# pause state lives in a file
 is_paused() {
     [ -f "$PAUSED_FILE" ]
 }
 
-# background worker (silent - writes state to files, no terminal output)
 player_worker() {
     while true; do
         if [ -s "$QUEUE_FILE" ]; then
@@ -86,9 +106,10 @@ player_worker() {
             IFS='|' read -r vid title artist <<< "$line"
             if [ -n "$vid" ]; then
                 echo "$line" > "$NOW_FILE"
+                echo 0 > "$POS_FILE"
 
                 url="https://music.youtube.com/watch?v=$vid"
-                mpv --no-video --ytdl-format=bestaudio "$url" > /dev/null 2>&1 &
+                MSTREAM_POS_FILE="$POS_FILE" mpv --no-video --ytdl-format=bestaudio --script="$SYNC_SCRIPT" "$url" > /dev/null 2>&1 &
                 MPV_PID=$!
                 echo $MPV_PID > "$PID_FILE"
                 rm -f "$SKIPPED_FILE"
@@ -97,8 +118,8 @@ player_worker() {
                 rm -f "$PID_FILE"
                 rm -f "$NOW_FILE"
                 rm -f "$PAUSED_FILE"
+                rm -f "$POS_FILE"
 
-                # handle loop: re-queue the song if loop is active
                 was_skipped=0
                 if [ -f "$SKIPPED_FILE" ]; then
                     was_skipped=1
@@ -121,7 +142,6 @@ player_worker() {
                     echo "$line" >> "$QUEUE_FILE"
                 fi
 
-                # prevents outube 403 rate-limiting
                 if [ $status -eq 4 ] || [ $status -eq 143 ] || [ $status -eq 137 ] || [ $status -ne 0 ]; then
                     sleep 1.5
                 fi
@@ -132,7 +152,6 @@ player_worker() {
     done
 }
 
-# start worker in background
 player_worker &
 WORKER_PID=$!
 
@@ -154,7 +173,6 @@ urlencode() {
 search_song() {
     local query="$1"
     local limit="${2:-1}"
-    # reject URLs - only song name queries are allowed (no links if a nerd tries to put some fishy links)
     if [[ "$query" =~ ://|^www\. ]]; then
         echo "error: links are not supported. Please search by song name instead." >&2
         return
@@ -173,14 +191,12 @@ search_song() {
 
 
 
-# playback helper functions
 
 do_skip() {
     if [ -f "$PID_FILE" ]; then
         touch "$SKIPPED_FILE"
         local pid
         pid=$(cat "$PID_FILE")
-        # resume first if paused, otherwise SIGTERM may not be delivered
         if is_paused; then
             kill -CONT "$pid" 2>/dev/null
         fi
@@ -223,6 +239,202 @@ do_loop() {
     echo "$new_mode"
 }
 
+
+get_elapsed_ms() {
+    local pos whole frac ms
+    pos=""
+    [ -f "$POS_FILE" ] && IFS= read -r pos < "$POS_FILE" 2>/dev/null
+    if [ -z "$pos" ]; then
+        echo 0
+        return
+    fi
+    whole="${pos%%.*}"
+    frac="${pos#*.}"
+    [ "$frac" = "$pos" ] && frac="000"
+    frac="${frac}000"
+    frac="${frac:0:3}"
+    ms=$(( 10#$whole * 1000 + 10#$frac ))
+    echo "$ms"
+}
+
+fetch_lyrics() {
+    local title="$1" artist="$2"
+    if ! command -v curl &> /dev/null; then
+        echo "curl is required to reach lrclib.net over HTTPS (bash has no TLS support of its own)." >&2
+        return 1
+    fi
+    if ! echo | grep -P '' &> /dev/null; then
+        echo "GNU grep with PCRE support (-P) is required to parse the lyrics response." >&2
+        return 1
+    fi
+
+    local t a url response
+    t=$(urlencode "$title")
+    a=$(urlencode "$artist")
+    url="https://lrclib.net/api/search?track_name=${t}&artist_name=${a}"
+    response=$(curl -s --max-time 10 -A "mstream-cli" "$url")
+
+    if [ -z "$response" ] || [ "$response" = "[]" ]; then
+        return 1
+    fi
+
+    local matches raw m
+    mapfile -t matches < <(printf '%s' "$response" | grep -oP '"syncedLyrics"\s*:\s*"\K(\\.|[^"\\])*(?=")')
+    raw=""
+    for m in "${matches[@]}"; do
+        if [ -n "$m" ]; then
+            raw="$m"
+            break
+        fi
+    done
+
+    if [ -z "$raw" ]; then
+        return 1
+    fi
+
+    printf '%s' "$raw" | sed \
+        -e 's/\\\\/\x01/g' \
+        -e 's/\\n/\n/g' \
+        -e 's/\\t/\t/g' \
+        -e 's/\\r//g' \
+        -e 's/\\"/"/g' \
+        -e 's/\\\//\//g' \
+        -e 's/\x01/\\/g'
+    return 0
+}
+
+parse_lrc_to_file() {
+    local lrc="$1" outfile="$2"
+    local tmp
+    tmp=$(mktemp)
+    : > "$tmp"
+    while IFS= read -r line; do
+        if [[ "$line" =~ ^\[([0-9]+):([0-9]+)\.([0-9]+)\](.*)$ ]]; then
+            local min sec frac text total_ms
+            min=${BASH_REMATCH[1]}
+            sec=${BASH_REMATCH[2]}
+            frac=${BASH_REMATCH[3]}
+            text="${BASH_REMATCH[4]}"
+            if [ ${#frac} -eq 2 ]; then frac="${frac}0"; fi
+            if [ ${#frac} -gt 3 ]; then frac="${frac:0:3}"; fi
+            total_ms=$(( (10#$min * 60 + 10#$sec) * 1000 + 10#$frac ))
+            printf "%d|%s\n" "$total_ms" "$text" >> "$tmp"
+        fi
+    done <<< "$lrc"
+    sort -t'|' -k1,1n "$tmp" > "$outfile"
+    rm -f "$tmp"
+}
+
+lyrics_view() {
+    if [ ! -f "$NOW_FILE" ]; then
+        echo "Nothing is playing."
+        sleep 1
+        return
+    fi
+
+    local vid title artist track_key
+    IFS='|' read -r vid title artist < "$NOW_FILE"
+    track_key="$vid|$title|$artist"
+
+    clear
+    printf "\033[34mFetching lyrics for %s - %s...\033[0m\n" "$title" "$artist"
+    local lrc
+    if ! lrc=$(fetch_lyrics "$title" "$artist"); then
+        echo "No synced lyrics found for '$title' by '$artist'."
+        read -r -p "(press enter to go back) "
+        return
+    fi
+
+    local lyrics_tmp
+    lyrics_tmp=$(mktemp)
+    parse_lrc_to_file "$lrc" "$lyrics_tmp"
+
+    if [ ! -s "$lyrics_tmp" ]; then
+        echo "Lyrics were found but could not be parsed."
+        rm -f "$lyrics_tmp"
+        read -r -p "(press enter to go back) "
+        return
+    fi
+
+    local lyric_times=() lyric_texts=()
+    while IFS='|' read -r t txt; do
+        lyric_times+=("$t")
+        lyric_texts+=("$txt")
+    done < "$lyrics_tmp"
+    rm -f "$lyrics_tmp"
+
+    local total_lines=${#lyric_times[@]}
+
+    tput smcup 2>/dev/null
+    tput civis 2>/dev/null
+    clear
+
+    local last_idx=-1
+    local rows cols
+    rows=$(tput lines 2>/dev/null || echo 24)
+    cols=$(tput cols 2>/dev/null || echo 80)
+
+    while true; do
+        local cur_now=""
+        [ -f "$NOW_FILE" ] && IFS= read -r cur_now < "$NOW_FILE" 2>/dev/null
+        if [ "$cur_now" != "$track_key" ]; then
+            break
+        fi
+
+        local elapsed
+        elapsed=$(get_elapsed_ms)
+
+        local cur_idx=$last_idx i
+        if [ "$cur_idx" -ge 0 ] && [ "$cur_idx" -lt "$total_lines" ] && [ "${lyric_times[$cur_idx]:-0}" -gt "$elapsed" ]; then
+            cur_idx=-1
+        fi
+
+        local start_search=$(( cur_idx == -1 ? 0 : cur_idx ))
+        for ((i=start_search; i<total_lines; i++)); do
+            if [ "${lyric_times[$i]}" -le "$elapsed" ]; then
+                cur_idx=$i
+            else
+                break
+            fi
+        done
+        last_idx=$cur_idx
+
+        tput cup 0 0
+        local header="$title - $artist"
+        printf "\033[K\033[34m%s\033[0m\n" "${header:0:$((cols-1))}"
+        printf "\033[K\033[38;5;236m────────────────────────────────────────\033[0m\n"
+
+        local context=$(( (rows - 5) / 2 ))
+        [ "$context" -lt 2 ] && context=2
+        local start_i=$((cur_idx - context))
+        local end_i=$((cur_idx + context))
+        [ "$start_i" -lt 0 ] && start_i=0
+        [ "$end_i" -ge "$total_lines" ] && end_i=$((total_lines - 1))
+
+        for ((i=start_i; i<=end_i; i++)); do
+            local txt="${lyric_texts[$i]}"
+            [ -z "$txt" ] && txt=" "
+            if [ "$i" -eq "$cur_idx" ]; then
+                printf "\033[K\033[1;36m%s\033[0m\n" "${txt:0:$((cols-1))}"
+            else
+                printf "\033[K\033[2m%s\033[0m\n" "${txt:0:$((cols-1))}"
+            fi
+        done
+        printf "\033[K\n\033[K\033[2mPress any key to go back\033[0m\n"
+
+        if read -t 0.3 -rsn1 _key 2>/dev/null; then
+            break
+        fi
+
+        if [ ! -f "$PID_FILE" ] && [ "$cur_idx" -eq $((total_lines - 1)) ]; then
+            :
+        fi
+    done
+
+    tput cnorm 2>/dev/null
+    tput rmcup 2>/dev/null
+}
+
 print_track_table() {
     local file="$1"
     local i=1
@@ -234,7 +446,6 @@ print_track_table() {
     done < "$file"
 }
 
-# parses a "1 3 5" / "2-4" style selection string against a valid range.
 parse_index_selection() {
     local choice="$1" total="$2"
     local -n _out="$3"
@@ -261,8 +472,6 @@ parse_index_selection() {
     [ ${#_out[@]} -gt 0 ]
 }
 
-# removes the given (unsorted) 1-based line numbers from a '|'-delimited
-# track file, printing what was removed. echoes the count removed.
 remove_tracks_by_indices() {
     local file="$1"; shift
     local indices=("$@")
@@ -299,7 +508,7 @@ do_queue_menu() {
         case "$MENU_RESULT" in
             "Remove tracks")
                 echo ""
-                read -e -p "Enter numbers to remove (e.g. 1 3 5 or 2-4, or blank to cancel): " choice
+                read -r -e -p "Enter numbers to remove (e.g. 1 3 5 or 2-4, or blank to cancel): " choice
                 if [ -z "$choice" ]; then continue; fi
                 local total lines_to_remove=()
                 total=$(wc -l < "$QUEUE_FILE")
@@ -314,9 +523,9 @@ do_queue_menu() {
                 echo ""
                 local total from_pos to_pos
                 total=$(wc -l < "$QUEUE_FILE")
-                read -e -p "Move from position (1-$total, blank to cancel): " from_pos
+                read -r -e -p "Move from position (1-$total, blank to cancel): " from_pos
                 if [ -z "$from_pos" ]; then continue; fi
-                read -e -p "Move to position (1-$total): " to_pos
+                read -r -e -p "Move to position (1-$total): " to_pos
                 if ! [[ "$from_pos" =~ ^[0-9]+$ ]] || ! [[ "$to_pos" =~ ^[0-9]+$ ]] || \
                    [ "$from_pos" -lt 1 ] || [ "$from_pos" -gt "$total" ] || \
                    [ "$to_pos" -lt 1 ] || [ "$to_pos" -gt "$total" ]; then
@@ -350,7 +559,6 @@ do_queue_menu() {
     done
 }
 
-# interactive menu
 
 MENU_RESULT=""
 MENU_INDEX=-1
@@ -362,7 +570,6 @@ menu_select() {
     local selected=0
     local count=${#options[@]}
 
-    # hide cursor
     tput civis 2>/dev/null
 
     local read_args=("-rsn1")
@@ -370,10 +577,9 @@ menu_select() {
         read_args=("-t" "$MENU_TIMEOUT" "-rsn1")
     fi
 
-    # draw menu initially
     local i
     for i in "${!options[@]}"; do
-        if [ $i -eq $selected ]; then
+        if [ "$i" -eq "$selected" ]; then
             printf "\033[K\033[%sm▌\033[0m \033[1m%s\033[0m\n" "$color_code" "${options[$i]}"
         else
             printf "\033[K\033[38;5;236m▌\033[0m %s\n" "${options[$i]}"
@@ -382,7 +588,7 @@ menu_select() {
 
     while true; do
         local key
-        if ! read "${read_args[@]}" key; then
+        if ! read -r "${read_args[@]}" key; then
             if [ -n "$MENU_TIMEOUT_CB" ]; then
                 tput sc 2>/dev/null
                 eval "$MENU_TIMEOUT_CB"
@@ -396,44 +602,39 @@ menu_select() {
             continue
         fi
 
-        # enter key (empty string)
         if [ "$key" = "" ]; then
             break
         fi
 
-        # escape sequence (arrow keys)
         if [ "$key" = $'\033' ]; then
             local rest
             read -rsn2 rest
             case "$rest" in
-                '[A')  # up arrow
+                '[A')
                     if [ $selected -gt 0 ]; then
                         selected=$((selected - 1))
                     fi
                     ;;
-                '[B')  # down arrow
+                '[B')
                     if [ $selected -lt $((count - 1)) ]; then
                         selected=$((selected + 1))
                     fi
                     ;;
             esac
 
-            # move cursor up by menu height and redraw
             printf "\033[%dA" "$count"
 
             for i in "${!options[@]}"; do
                 printf "\033[2K"  
-                if [ $i -eq $selected ]; then
+                if [ "$i" -eq "$selected" ]; then
                     printf "\033[%sm▌\033[0m \033[1m%s\033[0m\n" "$color_code" "${options[$i]}"
                 else
                     printf "\033[38;5;236m▌\033[0m %s\n" "${options[$i]}"
                 fi
             done
         fi
-        # ignore any other keys
     done
 
-    # show cursor
     tput cnorm 2>/dev/null
 
     MENU_RESULT="${options[$selected]}"
@@ -462,7 +663,6 @@ do_interactive_search() {
     options+=("Cancel")
 
     echo ""
-    # Call menu with blue colour
     menu_select "34" "${options[@]}"
 
     if [ "$MENU_RESULT" = "Cancel" ]; then
@@ -481,7 +681,6 @@ do_interactive_search() {
     return 0
 }
 
-# now playing screen (separate full-screen view with interactive menu)
 
 render_status() {
     printf "\033[K\n"
@@ -490,8 +689,9 @@ render_status() {
         IFS='|' read -r vid title artist < "$NOW_FILE"
         local queue_count
         queue_count=$(wc -l < "$QUEUE_FILE" 2>/dev/null | tr -d ' ')
-        local loop_mode
-        loop_mode=$(cat "$LOOP_FILE" 2>/dev/null || echo "off")
+        local loop_mode="off"
+        [ -f "$LOOP_FILE" ] && IFS= read -r loop_mode < "$LOOP_FILE" 2>/dev/null
+        [ -z "$loop_mode" ] && loop_mode="off"
 
         local cols label track max_len
         cols=$(tput cols 2>/dev/null || echo 80)
@@ -539,7 +739,7 @@ playing_mode() {
         fi
 
         local current_now=""
-        if [ -f "$NOW_FILE" ]; then current_now=$(cat "$NOW_FILE"); fi
+        if [ -f "$NOW_FILE" ]; then IFS= read -r current_now < "$NOW_FILE" 2>/dev/null || true; fi
         local current_queue
         current_queue=$(wc -l < "$QUEUE_FILE" 2>/dev/null | tr -d ' ')
         local current_paused=0
@@ -557,20 +757,20 @@ playing_mode() {
     while true; do
         tput cup 0 0
         render_status
-        last_now=$(cat "$NOW_FILE" 2>/dev/null)
+        last_now=""
+        [ -f "$NOW_FILE" ] && IFS= read -r last_now < "$NOW_FILE" 2>/dev/null
         last_queue=$(wc -l < "$QUEUE_FILE" 2>/dev/null | tr -d ' ')
         last_paused=0
         is_paused && last_paused=1
         MENU_EXIT=""
 
-        # build menu options dynamically
         local menu_options=("skip")
         if is_paused; then
             menu_options+=("resume")
         else
             menu_options+=("pause")
         fi
-        menu_options+=("loop" "queue" "add" "quit")
+        menu_options+=("loop" "lyrics" "queue" "add" "quit")
 
         MENU_TIMEOUT=1
         MENU_TIMEOUT_CB="check_playing_status"
@@ -598,6 +798,10 @@ playing_mode() {
             "loop")
                 do_loop > /dev/null
                 ;;
+            "lyrics")
+                lyrics_view
+                clear
+                ;;
             "queue")
                 clear
                 do_queue_menu
@@ -612,7 +816,7 @@ playing_mode() {
                 
                 if [ "$MENU_RESULT" = "Add a Song" ]; then
                     clear
-                    read -e -p "Enter song name to add (leave blank to cancel): " add_query
+                    read -r -e -p "Enter song name to add (leave blank to cancel): " add_query
                     if [ -n "$add_query" ]; then
                         if do_interactive_search "$add_query"; then
                             sleep 1
@@ -684,7 +888,7 @@ do_interactive_playlists() {
             return
         elif [ "$selected" = "Create new playlist" ]; then
             echo ""
-            read -e -p $'\001\033[34m\002Enter new playlist name (leave blank to cancel):\001\033[0m\002 ' new_name
+            read -r -e -p $'\001\033[34m\002Enter new playlist name (leave blank to cancel):\001\033[0m\002 ' new_name
             if [ -n "$new_name" ]; then
                 new_name=$(echo "$new_name" | tr -cd 'A-Za-z0-9_-')
                 if [ -n "$new_name" ]; then
@@ -716,7 +920,7 @@ do_interactive_playlists() {
                 continue
             fi
             echo ""
-            read -e -p $'\001\033[34m\002Enter numbers to delete (e.g. 1 3, or \'cancel\'):\001\033[0m\002 ' choice
+            read -r -e -p $'\001\033[34m\002Enter numbers to delete (e.g. 1 3, or \'cancel\'):\001\033[0m\002 ' choice
             if [ "$choice" == "cancel" ] || [ -z "$choice" ]; then
                 continue
             fi
@@ -759,7 +963,7 @@ do_interactive_playlists() {
                         ;;
                     "Add Song")
                         echo ""
-                        read -e -p $'\001\033[34m\002Search a song to add (leave blank to cancel):\001\033[0m\002 ' add_query
+                        read -r -e -p $'\001\033[34m\002Search a song to add (leave blank to cancel):\001\033[0m\002 ' add_query
                         if [ -n "$add_query" ]; then
                             if do_interactive_search "$add_query" "$PLAYLIST_DIR/${pname}.txt"; then
                                 sleep 1
@@ -788,7 +992,6 @@ do_interactive_playlists() {
     done
 }
 
-# main
 
 do_play_playlist() {
     local pname="$1" is_shuffle="$2"
@@ -828,7 +1031,7 @@ do_remove_from_playlist() {
 
     print_track_table "$file"
 
-    read -e -p "Enter numbers to remove (e.g. 1 3 5 or 2-4, or 'cancel'): " choice
+    read -r -e -p "Enter numbers to remove (e.g. 1 3 5 or 2-4, or 'cancel'): " choice
     if [ "$choice" == "cancel" ] || [ -z "$choice" ]; then
         echo "Cancelled."
         return
@@ -845,7 +1048,6 @@ do_remove_from_playlist() {
     echo "Removed $removed_count track(s) from '$pname'."
 }
 
-# handles an initial search query passed as CLI args, e.g. ./mstream.sh believer
 if [ $# -gt 0 ]; then
     initial_query="$*"
     echo -e "\033[34mSearching for:\033[0m $initial_query"
@@ -858,7 +1060,6 @@ fi
 PLAYLIST_ACTION=""
 PLAYLIST_TARGET=""
 
-# main interactive loop - entirely menu/arrow-key driven, no typed commands
 while true; do
     clear
     printf "\033[34m              Mstream-CLI\033[0m\n"
@@ -867,7 +1068,7 @@ while true; do
 
     case "$MENU_RESULT" in
         "search")
-            read -e -p $'\001\033[34m\002Search a song (leave blank to cancel):\001\033[0m\002 ' query
+            read -r -e -p $'\001\033[34m\002Search a song (leave blank to cancel):\001\033[0m\002 ' query
             if [ -z "$query" ]; then continue; fi
             if do_interactive_search "$query"; then
                 sleep 0.5
@@ -892,18 +1093,3 @@ done
 
 echo "Goodbye!"
 
-# mstream - a lightweight CLI tool to stream music in terminal
-# Copyright (C) 2026  <aviinasxhh>
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <https://www.gnu.org/licenses/>.
