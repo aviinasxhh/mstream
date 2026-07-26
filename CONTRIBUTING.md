@@ -6,8 +6,6 @@ We want to keep this project lightweight, blazing fast, and incredibly reliable.
 
 ## No "Vibe Coding"
 
-We take engineering rigor seriously. We do not accept PRs from "vibe coders" (coding without understanding, guessing syntax, failing to test edge cases, or throwing code at the wall until it sticks). 
-
 Before submitting a Pull Request, you must ensure:
 1. **You fully understand the code you are modifying.**
 2. **You have thoroughly tested your changes.** (Test it against missing dependencies, weird characters in search queries, and abrupt terminal exits).
