@@ -10,12 +10,17 @@ NOW_FILE="$CONFIG_DIR/now_playing"
 PAUSED_FILE="$CONFIG_DIR/paused"
 LOCK_FILE="$CONFIG_DIR/mstream.lock"
 POS_FILE="$CONFIG_DIR/pos"
+DURATION_FILE="$CONFIG_DIR/duration"
+ARTWORK_FILE="$CONFIG_DIR/artwork_url"
+DISCORD_RPC_PID_FILE="$CONFIG_DIR/discord_rpc.pid"
+DISCORD_CLIENT_ID_FILE="$CONFIG_DIR/discord_client_id"
 SYNC_SCRIPT="$CONFIG_DIR/sync_pos.lua"
 
 mkdir -p "$PLAYLIST_DIR"
 
 cat > "$SYNC_SCRIPT" << 'LUA_EOF'
 local pos_file = os.getenv("MSTREAM_POS_FILE")
+local dur_file = os.getenv("MSTREAM_DUR_FILE")
 local last_time = 0
 
 local function write_pos(_, value)
@@ -31,7 +36,17 @@ local function write_pos(_, value)
     end
 end
 
+local function write_dur(_, value)
+    if dur_file == nil or value == nil then return end
+    local f = io.open(dur_file, "w")
+    if f then
+        f:write(string.format("%.3f", value))
+        f:close()
+    end
+end
+
 mp.observe_property("time-pos", "number", write_pos)
+mp.observe_property("duration", "number", write_dur)
 LUA_EOF
 
 if command -v flock &> /dev/null; then
@@ -45,7 +60,7 @@ fi
 : > "$QUEUE_FILE"
 rm -f "$PID_FILE"
 echo "off" > "$LOOP_FILE"
-rm -f "$SKIPPED_FILE" "$NOW_FILE" "$PAUSED_FILE" "$POS_FILE"
+rm -f "$SKIPPED_FILE" "$NOW_FILE" "$PAUSED_FILE" "$POS_FILE" "$DURATION_FILE" "$ARTWORK_FILE" "$DISCORD_RPC_PID_FILE"
 
 check_dependencies() {
     printf "\033[34mChecking dependencies...\033[0m\n"
@@ -66,7 +81,12 @@ check_dependencies() {
     else
         printf "\033[32mAll dependencies are installed.\033[0m\n"
         if ! command -v curl &> /dev/null; then
-            printf "\033[33mNote: curl was not found - the lyrics feature will be unavailable (bash can't do HTTPS on its own).\033[0m\n"
+            printf "\033[33mNote: curl was not found - the lyrics feature and Discord RPC artwork will be unavailable.\033[0m\n"
+        fi
+        if ! command -v python3 &> /dev/null; then
+            printf "\033[33mNote: python3 was not found - Discord Rich Presence will be unavailable.\033[0m\n"
+        elif [ ! -f "$DISCORD_CLIENT_ID_FILE" ]; then
+            printf "\033[33mNote: Discord RPC not configured. To enable, save your Client ID to %s\033[0m\n" "$DISCORD_CLIENT_ID_FILE"
         fi
         sleep 0.5
     fi
@@ -80,6 +100,9 @@ cleanup() {
     if [ -n "$WORKER_PID" ]; then
         kill "$WORKER_PID" 2>/dev/null
     fi
+    if [ -f "$DISCORD_RPC_PID_FILE" ]; then
+        kill "$(cat "$DISCORD_RPC_PID_FILE")" 2>/dev/null
+    fi
     if [ -f "$PID_FILE" ]; then
         kill -9 "$(cat "$PID_FILE")" 2>/dev/null
     fi
@@ -88,13 +111,47 @@ cleanup() {
     if [ ${#remaining_jobs[@]} -gt 0 ]; then
         kill "${remaining_jobs[@]}" 2>/dev/null
     fi
-    rm -f "$PID_FILE" "$QUEUE_FILE" "$LOOP_FILE" "$SKIPPED_FILE" "$NOW_FILE" "$PAUSED_FILE" "$POS_FILE"
+    rm -f "$PID_FILE" "$QUEUE_FILE" "$LOOP_FILE" "$SKIPPED_FILE" "$NOW_FILE" "$PAUSED_FILE" "$POS_FILE" "$DURATION_FILE" "$ARTWORK_FILE" "$DISCORD_RPC_PID_FILE"
     exit 0
 }
 trap cleanup EXIT INT TERM HUP
 
 is_paused() {
     [ -f "$PAUSED_FILE" ]
+}
+
+urlencode() {
+    local string="$1" strlen encoded c o i
+    strlen=${#string}
+    for (( i=0; i<strlen; i++ )); do
+        c="${string:i:1}"
+        case "$c" in
+            [a-zA-Z0-9.~_-]) o="$c" ;;
+            ' ') o="+" ;;
+            *) printf -v o '%%%02X' "'$c" ;;
+        esac
+        encoded+="$o"
+    done
+    echo "$encoded"
+}
+
+fetch_artwork_url() {
+    local title="$1" artist="$2"
+    if ! command -v curl &> /dev/null; then return 1; fi
+    local query encoded_query url response artwork
+    query="$artist $title"
+    encoded_query=$(urlencode "$query")
+    url="https://itunes.apple.com/search?term=${encoded_query}&entity=song&limit=1"
+    response=$(curl -s --max-time 5 "$url")
+    if [ -z "$response" ]; then return 1; fi
+    artwork=$(printf '%s' "$response" | grep -oP '"artworkUrl100"\s*:\s*"\K[^"]+' | head -1)
+    if [ -n "$artwork" ]; then
+        # Upscale from 100x100 to 600x600 for higher resolution
+        artwork="${artwork/100x100bb/600x600bb}"
+        echo "$artwork"
+        return 0
+    fi
+    return 1
 }
 
 player_worker() {
@@ -108,8 +165,18 @@ player_worker() {
                 echo "$line" > "$NOW_FILE"
                 echo 0 > "$POS_FILE"
 
+                # Fetch artwork URL in background (don't delay playback)
+                rm -f "$ARTWORK_FILE"
+                if command -v curl &> /dev/null; then
+                    ( artwork_url=$(fetch_artwork_url "$title" "$artist" 2>/dev/null)
+                      if [ -n "$artwork_url" ]; then
+                          echo "$artwork_url" > "$ARTWORK_FILE"
+                      fi
+                    ) &
+                fi
+
                 url="https://music.youtube.com/watch?v=$vid"
-                MSTREAM_POS_FILE="$POS_FILE" mpv --no-video --ytdl-format=bestaudio --script="$SYNC_SCRIPT" "$url" > /dev/null 2>&1 &
+                MSTREAM_POS_FILE="$POS_FILE" MSTREAM_DUR_FILE="$DURATION_FILE" mpv --no-video --ytdl-format=bestaudio --script="$SYNC_SCRIPT" "$url" > /dev/null 2>&1 &
                 MPV_PID=$!
                 echo $MPV_PID > "$PID_FILE"
                 rm -f "$SKIPPED_FILE"
@@ -119,6 +186,8 @@ player_worker() {
                 rm -f "$NOW_FILE"
                 rm -f "$PAUSED_FILE"
                 rm -f "$POS_FILE"
+                rm -f "$DURATION_FILE"
+                rm -f "$ARTWORK_FILE"
 
                 was_skipped=0
                 if [ -f "$SKIPPED_FILE" ]; then
@@ -155,20 +224,15 @@ player_worker() {
 player_worker &
 WORKER_PID=$!
 
-urlencode() {
-    local string="$1" strlen encoded c o i
-    strlen=${#string}
-    for (( i=0; i<strlen; i++ )); do
-        c="${string:i:1}"
-        case "$c" in
-            [a-zA-Z0-9.~_-]) o="$c" ;;
-            ' ') o="+" ;;
-            *) printf -v o '%%%02X' "'$c" ;;
-        esac
-        encoded+="$o"
-    done
-    echo "$encoded"
-}
+# Launch Discord RPC daemon if configured
+if [ -f "$DISCORD_CLIENT_ID_FILE" ] && command -v python3 &> /dev/null; then
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    python3 "$SCRIPT_DIR/discord_rpc.py" &
+    DISCORD_RPC_PID=$!
+    echo $DISCORD_RPC_PID > "$DISCORD_RPC_PID_FILE"
+fi
+
+
 
 search_song() {
     local query="$1"
